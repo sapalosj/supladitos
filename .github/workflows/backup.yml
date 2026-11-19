@@ -1,0 +1,75 @@
+# Nightly database backup (9.5). Supabase Free has no backups of its own.
+#
+# Needs two repository secrets (Settings > Secrets and variables > Actions):
+#   SUPABASE_DB_URL     Production connection string. Use the "Session pooler"
+#                       URL from Supabase (Connect > Session pooler): GitHub
+#                       runners have no IPv6, so the direct URL won't connect.
+#   BACKUP_PASSPHRASE   Long random passphrase. The backup is encrypted with it
+#                       before upload, because it holds password hashes and
+#                       sales. Keep a copy somewhere safe: without it the
+#                       backups can't be opened.
+#
+# Each run uploads one encrypted artifact, kept for 30 days. To restore, see
+# "Backups" in README.md.
+name: Nightly database backup
+
+on:
+  schedule:
+    # 02:00 in Manila (UTC+8), after closing.
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install the Supabase CLI (pinned in package.json)
+        run: npm ci
+
+      - name: Check secrets
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          [ -n "$SUPABASE_DB_URL" ] || { echo "::error::SUPABASE_DB_URL secret is not set"; exit 1; }
+          [ -n "$BACKUP_PASSPHRASE" ] || { echo "::error::BACKUP_PASSPHRASE secret is not set"; exit 1; }
+
+      - name: Dump roles, schema and data
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          scripts/backup.sh "$SUPABASE_DB_URL" "backup/$STAMP"
+
+      - name: Compress and encrypt
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          tar -C backup -czf "supladitos-$STAMP.tar.gz" "$STAMP"
+          gpg --batch --yes --pinentry-mode loopback --symmetric --cipher-algo AES256 \
+            --passphrase-fd 0 --output "supladitos-$STAMP.tar.gz.gpg" "supladitos-$STAMP.tar.gz" <<< "$BACKUP_PASSPHRASE"
+          rm -rf backup "supladitos-$STAMP.tar.gz"
+          ls -l "supladitos-$STAMP.tar.gz.gpg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supladitos-db-${{ env.STAMP }}
+          path: supladitos-${{ env.STAMP }}.tar.gz.gpg
+          retention-days: 30
+          if-no-files-found: error
