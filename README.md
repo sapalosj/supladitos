@@ -48,11 +48,11 @@ flowchart LR
 
 ## Tech stack
 
-React 19, Vite, TypeScript, Tailwind CSS and shadcn/ui, TanStack Query, Dexie and `dexie-react-hooks`, `vite-plugin-pwa` (Workbox), Supabase (Postgres 17, Auth, RLS, RPCs in PL/pgSQL), Docker for local development, GitHub Actions for backups.
+React 19, Vite, TypeScript, Tailwind CSS and shadcn/ui, TanStack Query, Dexie and `dexie-react-hooks`, `vite-plugin-pwa` (Workbox), Supabase (Postgres 17, Auth, RLS, RPCs in PL/pgSQL), Netlify hosting, Docker for local development, GitHub Actions for backups.
 
 ## Project status
 
-The MVP (POS, orders, menu management, reports, day close, offline sync, backups) is built and tested locally. Production hosting is next. Progress is tracked in [TASKS.md](TASKS.md); the plan behind it is [supladitos.md](supladitos.md).
+The MVP (POS, orders, menu management, reports, day close, offline sync, backups) is built and running in production: the app on Netlify (https://supladitos.netlify.app, staff sign-in only), the database on Supabase. Next is a trial day at the shop. Progress is tracked in [TASKS.md](TASKS.md); the plan behind it is [supladitos.md](supladitos.md).
 
 ## Local development
 

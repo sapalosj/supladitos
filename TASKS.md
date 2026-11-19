@@ -24,9 +24,9 @@ _Last updated: 2026-11-20_
 | 6 | Orders | 6 / 6 | Done |
 | 7 | Dashboard | 6 / 6 | Done |
 | 8 | Day close | 4 / 4 | Done |
-| 9 | Production: hosting and backups | 2 / 7 | Next (needs production accounts) |
+| 9 | Production: hosting and backups | 5 / 7 | In progress (backup secrets, shop trial) |
 
-**Next up:** 9.2 (Supabase projects), then 9.3–9.4 and the backup secrets for 9.5. The repo is public at https://github.com/sapalosj/supladitos.
+**Next up:** set the `SUPABASE_DB_URL` and `BACKUP_PASSPHRASE` repo secrets and run the backup workflow once (9.5), confirm the PLACEHOLDER prices in the Menu screen, then the shop trial (9.7). Live at https://supladitos.netlify.app; repo at https://github.com/sapalosj/supladitos.
 
 ---
 
@@ -161,12 +161,18 @@ _Last updated: 2026-11-20_
 ### 9. Production: hosting and backups (§1, §7)
 
 - [x] 9.1 Put the repo on GitHub
-- [ ] 9.2 Create Supabase projects (prod and dev) and push migrations
-- [ ] 9.3 Create the owner account and seed the production menu
-- [ ] 9.4 Deploy to Cloudflare Pages with production env vars
+- [x] 9.2 Create Supabase projects (prod and dev) and push migrations
+- [x] 9.3 Create the owner account and seed the production menu
+- [x] 9.4 Deploy to Netlify with production env vars
 - [~] 9.5 Nightly `pg_dump` GitHub Action
 - [x] 9.6 Test a restore from a backup
 - [ ] 9.7 Install the PWA on the shop device and run a full day in parallel with the current process
+
+> 9.2: one production project, `supladitos` (ref `vquwzxinakmwlucjuiqr`, Singapore, free plan). Dev stays on the local Docker stack, so no second cloud project (the free plan allows two). All 11 migrations applied; `supabase_migrations.schema_migrations` uses the repo's version numbers, so `supabase db push` sees them as applied. `20261120000200_revoke_anon_helpers.sql` came from the Supabase security advisor. The remaining advisor warnings are intended: signed-in staff call `submit_order` and the auth helpers.
+>
+> 9.3: branch "Main branch" (Asia/Manila), owner `owner@supladitos.local` with a generated password (not in the repo), and the seed menu with Hazelnut available. The PLACEHOLDER prices from `seed.sql` still need checking against Menu.pdf; change them in the Menu screen.
+>
+> 9.4: Netlify project `supladitos` → https://supladitos.netlify.app. `netlify.toml` holds the build, SPA fallback and cache headers (`sw.js` no-cache). `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are set on the Netlify project. Deploys are manual (not linked to GitHub); each production deploy costs 15 of the free plan's 300 monthly credits, so batch them. Verified live: owner sign-in, menu loaded from production, service worker registered, no console errors.
 
 > 9.5: `.github/workflows/backup.yml` + `scripts/backup.sh` (Supabase CLI `db dump`: roles, schema, data), encrypted with `BACKUP_PASSPHRASE` and kept 30 days. The dump and the encrypt/decrypt steps were run locally; the workflow itself first runs once the repo is on GitHub (9.1) with the `SUPABASE_DB_URL` and `BACKUP_PASSPHRASE` secrets set. Tick it after the first green run.
 >
