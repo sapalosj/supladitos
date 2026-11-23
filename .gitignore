@@ -11,3 +11,6 @@ dev-dist
 
 # Database backups (scripts/backup.sh): contain password hashes and sales data
 backup/
+
+# Netlify CLI link state
+.netlify/

@@ -14,6 +14,12 @@ export interface Summary {
   byMethod: Record<PaymentMethod, number>
   /** Order count per payment method (non-voided). */
   countByMethod: Record<PaymentMethod, number>
+  /** Orders not paid yet (pay later): counted in `sales`, in no payment method. */
+  unpaid: number
+  unpaidCount: number
+  /** Discounts given (already taken off `sales`) and how many orders had one. */
+  discounts: number
+  discountedCount: number
   /** Sales per hour of the day (branch time), 0–23. */
   byHour: number[]
   topItems: { name: string; quantity: number; sales: number }[]
@@ -37,6 +43,10 @@ export function summarize(orders: LocalOrder[], timeZone: string): Summary {
   let sales = 0
   let orderCount = 0
   let voidedCount = 0
+  let unpaid = 0
+  let unpaidCount = 0
+  let discounts = 0
+  let discountedCount = 0
 
   for (const o of orders) {
     if (o.status === 'voided') {
@@ -45,10 +55,17 @@ export function summarize(orders: LocalOrder[], timeZone: string): Summary {
     }
     orderCount++
     sales += o.total
+    if (o.discountTotal) {
+      discounts += o.discountTotal
+      discountedCount++
+    }
     byHour[hourIn(o.createdAt, timeZone)] += o.total
     if (o.payment) {
       byMethod[o.payment.method] += o.total
       countByMethod[o.payment.method]++
+    } else {
+      unpaid += o.total
+      unpaidCount++
     }
     for (const i of o.items) {
       const it = items.get(i.itemName) ?? { name: i.itemName, quantity: 0, sales: 0 }
@@ -72,6 +89,10 @@ export function summarize(orders: LocalOrder[], timeZone: string): Summary {
     voidedCount,
     byMethod,
     countByMethod,
+    unpaid,
+    unpaidCount,
+    discounts,
+    discountedCount,
     byHour,
     topItems: [...items.values()].sort((a, b) => b.sales - a.sales || b.quantity - a.quantity),
     modifierRevenue: [...mods.values()].sort((a, b) => b.revenue - a.revenue),

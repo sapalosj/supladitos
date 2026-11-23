@@ -3,16 +3,28 @@ import { supabase } from './supabase'
 import { db, type LocalOrder } from './db'
 import { businessDate } from './format'
 import { syncMenu } from './menuSync'
-import { ORDER_SELECT, fromServerOrder, hasLocalChanges, setLastServerOrderNumber, toSubmitPayload } from './orders'
+import {
+  ORDER_SELECT,
+  fetchServerUnpaidOrders,
+  fromServerOrder,
+  hasLocalChanges,
+  setLastServerOrderNumber,
+  toDiscountsPayload,
+  toPaymentPayload,
+  toSubmitPayload,
+} from './orders'
 
 /**
  * Sync engine (3.4, 3.5).
  *
  * Push: every order in the outbox (syncStatus pending or failed) goes through
  * the idempotent submit_order RPC, oldest first. Status changes and voids made
- * on this device are sent once their order is on the server.
- * Pull: today's orders from the server are copied into Dexie so the queue
- * shows orders taken on other devices; the menu is refreshed too.
+ * on this device are sent once their order is on the server, and so are
+ * discount changes on saved orders (set_order_discounts) and payments taken
+ * later for orders that were saved unpaid (pay_order).
+ * Pull: today's orders and every recent unpaid order are copied into Dexie so
+ * the queue and the unpaid list show orders taken on other devices; the menu
+ * is refreshed too.
  *
  * Triggers: app start, the `online` event, every 30 s, and right after a sale
  * or a status change (`requestSync`). One run at a time; a request made during
@@ -87,11 +99,17 @@ function describeError(e: unknown): string {
 // ---- Push -----------------------------------------------------------------------
 
 async function pushOrder(order: LocalOrder): Promise<void> {
-  const sent = { status: order.status, voidReason: order.voidReason, statusChangedAt: order.statusChangedAt }
+  const sent = {
+    status: order.status,
+    voidReason: order.voidReason,
+    statusChangedAt: order.statusChangedAt,
+    paymentId: order.payment?.id ?? null,
+    discountChangedAt: order.discountChangedAt ?? null,
+  }
   const { data, error } = await supabase.rpc('submit_order', { p_order: toSubmitPayload(order) })
   if (error) throw error
 
-  const result = data as { order_number: number; business_date: string; price_mismatch: boolean }
+  const result = data as { order_number: number; business_date: string; price_mismatch: boolean; duplicate: boolean }
   await db.transaction('rw', db.orders, db.meta, async () => {
     const current = await db.orders.get(order.id)
     if (!current) return
@@ -104,6 +122,17 @@ async function pushOrder(order: LocalOrder): Promise<void> {
     await db.orders.update(order.id, {
       syncStatus: 'synced',
       statusSync: statusUnchanged ? 'synced' : 'pending',
+      // The payload carried the payment, unless it was taken while the request
+      // was in flight. A duplicate means the server already had the order and
+      // ignored the payload, so a payment still has to go through pay_order.
+      paymentSync:
+        current.payment && (result.duplicate || current.payment.id !== sent.paymentId) ? 'pending' : 'synced',
+      // Same for a discount change made after the order was saved.
+      discountSync:
+        current.discountSync === 'pending' &&
+        (result.duplicate || (current.discountChangedAt ?? null) !== sent.discountChangedAt)
+          ? 'pending'
+          : 'synced',
       orderNumber: result.order_number,
       priceMismatch: result.price_mismatch,
       syncError: null,
@@ -177,18 +206,76 @@ async function pushStatuses(): Promise<void> {
   }
 }
 
+/** Discounts changed after the order was saved, once the order is on the server. */
+async function pushDiscounts(): Promise<void> {
+  const changed = await db.orders
+    .where('discountSync')
+    .equals('pending')
+    .filter((o) => o.syncStatus === 'synced')
+    .toArray()
+  for (const order of changed) {
+    const sentAt = order.discountChangedAt ?? null
+    const { error } = await supabase.rpc('set_order_discounts', {
+      p_order_id: order.id,
+      p_discounts: toDiscountsPayload(order),
+    })
+    if (error) {
+      await db.orders.update(order.id, { syncError: describeError(error) })
+      if (isTransient(error)) throw error
+      continue
+    }
+    await db.transaction('rw', db.orders, async () => {
+      const current = await db.orders.get(order.id)
+      if (current && (current.discountChangedAt ?? null) === sentAt) {
+        await db.orders.update(order.id, { discountSync: 'synced', syncError: null })
+      }
+    })
+    markPushed()
+  }
+}
+
+/** Payments taken after the order was saved (pay later), once the order is on the server. */
+async function pushPayments(): Promise<void> {
+  const paid = await db.orders
+    .where('paymentSync')
+    .equals('pending')
+    .filter((o) => o.syncStatus === 'synced' && !!o.payment)
+    .toArray()
+  for (const order of paid) {
+    const payment = order.payment!
+    const { error } = await supabase.rpc('pay_order', { p_order_id: order.id, p_payment: toPaymentPayload(payment) })
+    if (error) {
+      await db.orders.update(order.id, { syncError: describeError(error) })
+      if (isTransient(error)) throw error
+      continue
+    }
+    await db.transaction('rw', db.orders, async () => {
+      const current = await db.orders.get(order.id)
+      if (current?.payment?.id === payment.id) {
+        await db.orders.update(order.id, { paymentSync: 'synced', syncError: null })
+      }
+    })
+    markPushed()
+  }
+}
+
 // ---- Pull -----------------------------------------------------------------------
 
 async function pullTodaysOrders(timeZone: string): Promise<void> {
   const today = businessDate(new Date(), timeZone)
-  const [{ data, error }, last] = await Promise.all([
+  const cutoff = businessDate(new Date(Date.now() - KEEP_DAYS * 86_400_000), timeZone)
+  const [{ data, error }, last, unpaid] = await Promise.all([
     supabase.from('orders').select(ORDER_SELECT).eq('business_date', today),
     supabase.rpc('last_order_number', { p_business_date: today }),
+    fetchServerUnpaidOrders(cutoff),
   ])
   if (error) throw error
   if (!last.error && typeof last.data === 'number') await setLastServerOrderNumber(today, last.data)
 
-  const server = data.map(fromServerOrder)
+  // Today's orders plus unpaid orders from earlier days.
+  const byId = new Map(unpaid.map((o) => [o.id, o]))
+  for (const o of data.map(fromServerOrder)) byId.set(o.id, o)
+  const server = [...byId.values()]
   await db.transaction('rw', db.orders, async () => {
     const local = await db.orders.bulkGet(server.map((o) => o.id))
     const toPut = server.filter((_, i) => {
@@ -197,8 +284,16 @@ async function pullTodaysOrders(timeZone: string): Promise<void> {
     })
     await db.orders.bulkPut(toPut)
 
+    // An earlier day's order this device still shows as unpaid, but the server
+    // no longer does (paid or voided on another device): drop the stale copy.
+    // History reads it from the server.
+    await db.orders
+      .where('businessDate')
+      .below(today)
+      .filter((o) => !o.payment && o.status !== 'voided' && !hasLocalChanges(o) && !byId.has(o.id))
+      .delete()
+
     // Housekeeping: drop old orders that are safely on the server.
-    const cutoff = businessDate(new Date(Date.now() - KEEP_DAYS * 86_400_000), timeZone)
     await db.orders
       .where('businessDate')
       .below(cutoff)
@@ -224,6 +319,9 @@ async function runOnce(): Promise<void> {
   try {
     await pushOrders()
     await pushStatuses()
+    // Discounts first: pay_order charges the order's total.
+    await pushDiscounts()
+    await pushPayments()
     await pullTodaysOrders(timeZone)
     if (Date.now() - lastMenuSync > MENU_INTERVAL_MS) {
       await syncMenu()

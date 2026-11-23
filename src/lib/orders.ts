@@ -1,5 +1,15 @@
 import type { Json } from './database.types'
-import { db, getMeta, setMeta, type LocalOrder, type LocalOrderItem, type OrderStatus } from './db'
+import {
+  db,
+  getMeta,
+  setMeta,
+  type LineDiscount,
+  type LocalOrder,
+  type LocalOrderItem,
+  type LocalPayment,
+  type OrderStatus,
+} from './db'
+import { lineDiscount } from './pricing'
 import { supabase, type Tables } from './supabase'
 import { businessDate } from './format'
 
@@ -40,6 +50,9 @@ export type NewOrder = Omit<
   | 'createdAt'
   | 'syncStatus'
   | 'statusSync'
+  | 'paymentSync'
+  | 'discountSync'
+  | 'discountChangedAt'
   | 'syncAttempts'
   | 'syncError'
   | 'lastSyncAttemptAt'
@@ -62,6 +75,9 @@ export async function saveOrder(order: NewOrder, timeZone: string): Promise<Loca
       createdAt: now.toISOString(),
       syncStatus: 'pending',
       statusSync: 'synced',
+      paymentSync: 'synced',
+      discountSync: 'synced',
+      discountChangedAt: null,
       syncAttempts: 0,
       syncError: null,
       lastSyncAttemptAt: null,
@@ -103,6 +119,68 @@ export async function voidOrder(order: LocalOrder, reason: string): Promise<void
   })
 }
 
+/** True for an order that still has to be paid (pay later). Voided orders owe nothing. */
+export function isUnpaid(o: LocalOrder): boolean {
+  return !o.payment && o.status !== 'voided'
+}
+
+/**
+ * Take payment for an order that was saved unpaid. The amount is always the
+ * order's total; the sync engine sends it through pay_order.
+ */
+export async function payOrder(
+  order: LocalOrder,
+  p: Pick<LocalPayment, 'method' | 'amountReceived' | 'changeDue'>,
+): Promise<void> {
+  await db.transaction('rw', db.orders, async () => {
+    const current = (await db.orders.get(order.id)) ?? order
+    if (current.payment) throw new Error('This order is already paid.')
+    if (current.status === 'voided') throw new Error('This order is voided.')
+    await db.orders.put({
+      ...current,
+      payment: { id: crypto.randomUUID(), amount: current.total, paidAt: new Date().toISOString(), ...p },
+      paymentSync: 'pending',
+    })
+  })
+}
+
+/**
+ * Change the discounts on a saved order: `discounts` maps an order item id to
+ * its discount (lines left out lose theirs). Works for unpaid orders (before
+ * taking payment) and for paid ones; for a paid order the payment follows the
+ * new total and the difference is returned, to refund (or collect, if
+ * negative). The sync engine sends the change through set_order_discounts.
+ */
+export async function setOrderDiscounts(
+  order: LocalOrder,
+  discounts: Record<string, LineDiscount | null | undefined>,
+): Promise<{ total: number; refund: number }> {
+  return db.transaction('rw', db.orders, async () => {
+    const current = (await db.orders.get(order.id)) ?? order
+    if (current.status === 'voided') throw new Error('This order is voided.')
+    const items = current.items.map((i) => {
+      const d = discounts[i.id]
+      const amount = lineDiscount(i.unitPrice, i.quantity, d)
+      return { ...i, discount: d && amount > 0 ? { ...d, quantity: Math.min(d.quantity, i.quantity), amount } : null }
+    })
+    const discountTotal = Math.min(
+      items.reduce((n, i) => n + (i.discount?.amount ?? 0), 0),
+      current.subtotal,
+    )
+    const total = current.subtotal - discountTotal
+    await db.orders.put({
+      ...current,
+      items,
+      discountTotal,
+      total,
+      payment: current.payment && { ...current.payment, amount: total },
+      discountSync: 'pending',
+      discountChangedAt: new Date().toISOString(),
+    })
+    return { total, refund: current.payment ? current.total - total : 0 }
+  })
+}
+
 // ---- RPC payload --------------------------------------------------------------
 
 /** The submit_order payload (snake_case JSON, see the 1.9 migration). */
@@ -119,6 +197,7 @@ export function toSubmitPayload(o: LocalOrder): Json {
     void_reason: o.voidReason,
     voided_at: o.voidedAt,
     subtotal: o.subtotal,
+    discount_total: o.discountTotal ?? 0,
     total: o.total,
     items: o.items.map((i) => ({
       id: i.id,
@@ -130,6 +209,11 @@ export function toSubmitPayload(o: LocalOrder): Json {
       quantity: i.quantity,
       line_total: i.lineTotal,
       notes: i.notes,
+      discount_id: i.discount?.discountId ?? null,
+      discount_name: i.discount?.name ?? null,
+      discount_percent: i.discount?.percent ?? null,
+      discount_quantity: i.discount?.quantity ?? 0,
+      discount_amount: i.discount?.amount ?? 0,
       modifiers: i.modifiers.map((m) => ({
         id: m.id,
         modifier_id: m.modifierId,
@@ -145,6 +229,32 @@ export function toSubmitPayload(o: LocalOrder): Json {
       amount_received: o.payment.amountReceived,
       change_due: o.payment.changeDue,
     },
+  }
+}
+
+/** The set_order_discounts payload: every line that has a discount. */
+export function toDiscountsPayload(o: LocalOrder): Json {
+  return {
+    items: o.items
+      .filter((i) => i.discount)
+      .map((i) => ({
+        id: i.id,
+        discount_id: i.discount!.discountId,
+        discount_name: i.discount!.name,
+        discount_percent: i.discount!.percent,
+        discount_quantity: i.discount!.quantity,
+      })),
+  }
+}
+
+/** The pay_order payload for an order paid after it was saved. */
+export function toPaymentPayload(p: LocalPayment): Json {
+  return {
+    id: p.id,
+    method: p.method,
+    amount_received: p.amountReceived,
+    change_due: p.changeDue,
+    paid_at: p.paidAt ?? null,
   }
 }
 
@@ -172,6 +282,16 @@ export function fromServerOrder(o: ServerOrder): LocalOrder {
       quantity: i.quantity,
       lineTotal: Number(i.line_total),
       notes: i.notes,
+      discount:
+        i.discount_quantity > 0
+          ? {
+              discountId: i.discount_id,
+              name: i.discount_name ?? 'Discount',
+              percent: Number(i.discount_percent ?? 0),
+              quantity: i.discount_quantity,
+              amount: Number(i.discount_amount),
+            }
+          : null,
       modifiers: i.order_item_modifiers.map((m) => ({
         id: m.id,
         modifierId: m.modifier_id,
@@ -192,6 +312,7 @@ export function fromServerOrder(o: ServerOrder): LocalOrder {
     voidReason: o.void_reason,
     voidedAt: o.voided_at,
     subtotal: Number(o.subtotal),
+    discountTotal: Number(o.discount_total),
     total: Number(o.total),
     items,
     payment: payment
@@ -201,12 +322,16 @@ export function fromServerOrder(o: ServerOrder): LocalOrder {
           amount: Number(payment.amount),
           amountReceived: payment.amount_received == null ? null : Number(payment.amount_received),
           changeDue: payment.change_due == null ? null : Number(payment.change_due),
+          paidAt: payment.created_at,
         }
       : null,
     createdAt: o.created_at,
     createdBy: o.created_by,
     syncStatus: 'synced',
     statusSync: 'synced',
+    paymentSync: 'synced',
+    discountSync: 'synced',
+    discountChangedAt: null,
     syncAttempts: 0,
     syncError: null,
     lastSyncAttemptAt: null,
@@ -216,7 +341,7 @@ export function fromServerOrder(o: ServerOrder): LocalOrder {
 
 /** True if this device has changes to the order the server hasn't seen yet. */
 export function hasLocalChanges(o: LocalOrder): boolean {
-  return o.syncStatus !== 'synced' || o.statusSync === 'pending'
+  return o.syncStatus !== 'synced' || o.statusSync === 'pending' || o.paymentSync === 'pending' || o.discountSync === 'pending'
 }
 
 /**
@@ -240,6 +365,24 @@ export async function fetchServerOrders(from: string, to: string): Promise<Local
     if (data.length < pageSize) break
   }
   return out
+}
+
+/**
+ * Unpaid orders (not voided, no payment) on or after a business date, from
+ * the server. Embedding `payments` and filtering it for null keeps only the
+ * orders that have none.
+ */
+export async function fetchServerUnpaidOrders(from: string): Promise<LocalOrder[]> {
+  const { data, error } = await supabase
+    .from('orders')
+    .select(ORDER_SELECT)
+    .gte('business_date', from)
+    .neq('status', 'voided')
+    .is('payments', null)
+    .order('created_at', { ascending: true })
+    .limit(500)
+  if (error) throw error
+  return (data as ServerOrder[]).map(fromServerOrder)
 }
 
 /**

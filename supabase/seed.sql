@@ -13,6 +13,9 @@
 insert into public.branches (id, name, timezone)
 values ('00000000-0000-4000-8000-000000000001', 'Main branch', 'Asia/Manila');
 
+insert into public.discounts (branch_id, name, percent)
+values ('00000000-0000-4000-8000-000000000001', '20% discount', 20);
+
 -- Owner login --------------------------------------------------------------------
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,

@@ -2,7 +2,7 @@ import { useProfile } from '@/lib/auth'
 import { orderNo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { NEXT_STEP, StatusBadge, advanceOrder, itemsSummary, useQueue } from './orderUi'
+import { NEXT_STEP, StatusBadge, UnpaidBadge, advanceOrder, itemsSummary, useQueue } from './orderUi'
 
 /**
  * The order queue under the tiles on the tablet POS (Pages Design: "POS —
@@ -28,6 +28,7 @@ export function QueueStrip({ className }: { className?: string }) {
                 <span className="flex items-center gap-2">
                   <span className="font-display text-xl leading-6">{orderNo(o.orderNumber)}</span>
                   <StatusBadge status={o.status} />
+                  {!o.payment && <UnpaidBadge />}
                   {o.customerName && <span className="truncate text-xs text-muted-foreground">{o.customerName}</span>}
                 </span>
                 <span className="truncate text-[13px] text-muted-foreground">{itemsSummary(o)}</span>

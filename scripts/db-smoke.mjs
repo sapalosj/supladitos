@@ -63,12 +63,15 @@ const variant = (item, name) => item.item_variants.find((v) => v.name === name)
 const modifier = (item, name) =>
   item.item_modifier_groups.flatMap((g) => g.modifier_groups.modifiers).find((m) => m.name === name)
 
-function buildOrder({ total, unitPrice, orderNumber = 1 } = {}) {
+function buildOrder({ total, unitPrice, orderNumber = 1, paid = true, discount = null } = {}) {
   const item = latte()
   const v = variant(item, 'Iced Regular')
   const oat = modifier(item, 'Oat milk')
   const regular = modifier(item, 'Regular')
   const unit = unitPrice ?? Number(v.price) + Number(oat.price_delta)
+  // `discount`: { id, name, percent, quantity, amount } on the one line (2 units).
+  const off = discount?.amount ?? 0
+  total = total ?? unit * 2 - off
   return {
     id: randomUUID(),
     created_at: new Date().toISOString(),
@@ -76,8 +79,9 @@ function buildOrder({ total, unitPrice, orderNumber = 1 } = {}) {
     order_type: 'dine_in',
     customer_name: 'Mia',
     status: 'new',
-    subtotal: total ?? unit * 2,
-    total: total ?? unit * 2,
+    subtotal: unit * 2,
+    discount_total: off,
+    total,
     items: [
       {
         id: randomUUID(),
@@ -89,13 +93,22 @@ function buildOrder({ total, unitPrice, orderNumber = 1 } = {}) {
         quantity: 2,
         line_total: unit * 2,
         notes: 'less ice',
+        ...(discount && {
+          discount_id: discount.id,
+          discount_name: discount.name,
+          discount_percent: discount.percent,
+          discount_quantity: discount.quantity,
+          discount_amount: discount.amount,
+        }),
         modifiers: [
           { id: randomUUID(), modifier_id: oat.id, name: oat.name, price_delta: Number(oat.price_delta), quantity: 1 },
           { id: randomUUID(), modifier_id: regular.id, name: regular.name, price_delta: 0, quantity: 1 },
         ],
       },
     ],
-    payment: { id: randomUUID(), method: 'cash', amount: total ?? unit * 2, amount_received: 500, change_due: 500 - (total ?? unit * 2) },
+    payment: paid
+      ? { id: randomUUID(), method: 'cash', amount: total, amount_received: 500, change_due: 500 - total }
+      : null,
   }
 }
 
@@ -167,6 +180,123 @@ await check('voiding requires a reason', async () => {
   assert.ok(error, 'void without reason succeeded')
 })
 
+// --- pay later ------------------------------------------------------------------
+const unpaidOrders = () =>
+  owner.from('orders').select('id, payments(id)').neq('status', 'voided').is('payments', null)
+
+let tab
+await check('an order can be saved unpaid and shows up as unpaid', async () => {
+  tab = buildOrder({ orderNumber: 9, paid: false })
+  const { error } = await owner.rpc('submit_order', { p_order: tab })
+  assert.ifError(error)
+  const { data, error: listError } = await unpaidOrders()
+  assert.ifError(listError)
+  assert.deepEqual(data.map((o) => o.id), [tab.id])
+})
+
+await check('pay_order records the payment for the order total, once', async () => {
+  const payment = { id: randomUUID(), method: 'gcash', amount_received: null, change_due: null }
+  const { data, error } = await owner.rpc('pay_order', { p_order_id: tab.id, p_payment: payment })
+  assert.ifError(error)
+  assert.equal(data.duplicate, false)
+  // A retry, or a second device taking the payment again, changes nothing.
+  const { data: again, error: againError } = await owner.rpc('pay_order', {
+    p_order_id: tab.id,
+    p_payment: { id: randomUUID(), method: 'cash', amount_received: 1000, change_due: 620 },
+  })
+  assert.ifError(againError)
+  assert.equal(again.duplicate, true)
+  assert.equal(again.payment_id, payment.id)
+  const { data: rows } = await owner.from('payments').select('method, amount').eq('order_id', tab.id)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].method, 'gcash')
+  assert.equal(Number(rows[0].amount), 380)
+  const { data: left } = await unpaidOrders()
+  assert.equal(left.length, 0)
+})
+
+await check('anon cannot call pay_order', async () => {
+  const { error } = await anon.rpc('pay_order', { p_order_id: tab.id, p_payment: { method: 'cash' } })
+  assert.ok(error, 'anon call succeeded')
+})
+
+// --- discounts ------------------------------------------------------------------
+let twenty
+await check('the branch has the 20% discount', async () => {
+  const { data, error } = await owner.from('discounts').select('*')
+  assert.ifError(error)
+  twenty = data.find((d) => Number(d.percent) === 20)
+  assert.ok(twenty, 'no 20% discount')
+})
+const disc = (quantity, amount) => ({ id: twenty.id, name: twenty.name, percent: 20, quantity, amount })
+
+await check('a discount on 1 of 2 drinks is saved without a mismatch', async () => {
+  // 190 a drink (with add-on): 20% = 38 off one of them.
+  const order = buildOrder({ orderNumber: 20, discount: disc(1, 38) })
+  const { data, error } = await owner.rpc('submit_order', { p_order: order })
+  assert.ifError(error)
+  assert.equal(data.price_mismatch, false)
+  assert.equal(Number(data.computed_total), 342)
+  const { data: row } = await owner.from('orders').select('subtotal, discount_total, total, order_items(discount_quantity, discount_amount, line_total), payments(amount)').eq('id', order.id).single()
+  assert.equal(Number(row.subtotal), 380)
+  assert.equal(Number(row.discount_total), 38)
+  assert.equal(Number(row.total), 342)
+  assert.equal(row.order_items[0].discount_quantity, 1)
+  assert.equal(Number(row.order_items[0].discount_amount), 38)
+  assert.equal(Number(row.order_items[0].line_total), 380)
+  assert.equal(Number(row.payments[0].amount), 342)
+})
+
+await check('a discount that does not add up is saved as charged and flagged', async () => {
+  const order = buildOrder({ orderNumber: 21, discount: disc(1, 100) })
+  const { data, error } = await owner.rpc('submit_order', { p_order: order })
+  assert.ifError(error)
+  assert.equal(data.price_mismatch, true)
+  assert.equal(Number(data.computed_total), 342)
+  const { data: row } = await owner.from('orders').select('total').eq('id', order.id).single()
+  assert.equal(Number(row.total), 280)
+})
+
+await check('set_order_discounts changes a paid order and its payment, and can be undone', async () => {
+  const items = (await owner.from('order_items').select('id').eq('order_id', first.id)).data
+  const payload = { items: [{ id: items[0].id, discount_id: twenty.id, discount_name: twenty.name, discount_percent: 20, discount_quantity: 2 }] }
+  for (let i = 0; i < 2; i++) {
+    const { data, error } = await owner.rpc('set_order_discounts', { p_order_id: first.id, p_discounts: payload })
+    assert.ifError(error)
+    assert.equal(Number(data.discount_total), 76)
+    assert.equal(Number(data.total), 304)
+  }
+  let { data: row } = await owner.from('orders').select('total, computed_total, payments(amount)').eq('id', first.id).single()
+  assert.equal(Number(row.total), 304)
+  assert.equal(Number(row.computed_total), 304)
+  assert.equal(Number(row.payments[0].amount), 304)
+  const { data: cleared, error } = await owner.rpc('set_order_discounts', { p_order_id: first.id, p_discounts: { items: [] } })
+  assert.ifError(error)
+  assert.equal(Number(cleared.total), 380)
+  ;({ data: row } = await owner.from('orders').select('total, discount_total, payments(amount)').eq('id', first.id).single())
+  assert.equal(Number(row.discount_total), 0)
+  assert.equal(Number(row.payments[0].amount), 380)
+})
+
+await check('an unpaid order is paid at its discounted total', async () => {
+  const order = buildOrder({ orderNumber: 22, paid: false })
+  await owner.rpc('submit_order', { p_order: order })
+  const { error } = await owner.rpc('set_order_discounts', {
+    p_order_id: order.id,
+    p_discounts: { items: [{ id: order.items[0].id, discount_id: twenty.id, discount_name: twenty.name, discount_percent: 20, discount_quantity: 1 }] },
+  })
+  assert.ifError(error)
+  const { error: payError } = await owner.rpc('pay_order', { p_order_id: order.id, p_payment: { id: randomUUID(), method: 'cash' } })
+  assert.ifError(payError)
+  const { data: rows } = await owner.from('payments').select('amount').eq('order_id', order.id)
+  assert.equal(Number(rows[0].amount), 342)
+})
+
+await check('anon cannot call set_order_discounts', async () => {
+  const { error } = await anon.rpc('set_order_discounts', { p_order_id: first.id, p_discounts: { items: [] } })
+  assert.ok(error, 'anon call succeeded')
+})
+
 // --- menu management RPCs (milestone 4) ----------------------------------------
 await check('save_menu_item saves item, variants and groups in one go', async () => {
   const item = latte()
@@ -231,7 +361,9 @@ await check('staff from another branch see none of this branch', async () => {
   const { data: items } = await other.from('menu_items').select('id')
   const { data: orders } = await other.from('orders').select('id')
   const { error: rpcError } = await other.rpc('submit_order', { p_order: first })
+  const { error: payError } = await other.rpc('pay_order', { p_order_id: first.id, p_payment: { method: 'cash' } })
   try {
+    assert.ok(payError, 'other branch could pay this branch order')
     assert.equal(items.length, 0)
     assert.equal(orders.length, 0)
     assert.ok(rpcError, 'other branch could resubmit this branch order')

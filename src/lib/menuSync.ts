@@ -2,14 +2,14 @@ import { supabase } from './supabase'
 import { db, setMeta } from './db'
 
 /**
- * Menu sync (3.2): copy the branch's menu from Supabase into Dexie.
+ * Menu sync (3.2): copy the branch's menu (and its discount types) from Supabase into Dexie.
  *
  * Every table is fetched first; Dexie is only touched once all of them
  * arrived, and then replaced in one transaction, so the POS never sees half a
  * menu. RLS scopes every query to the signed-in user's branch.
  */
 export async function syncMenu(): Promise<void> {
-  const [categories, items, variants, groups, modifiers, variantPrices, links] = await Promise.all([
+  const [categories, items, variants, groups, modifiers, variantPrices, links, discounts] = await Promise.all([
     supabase.from('categories').select('*'),
     supabase.from('menu_items').select('*'),
     supabase.from('item_variants').select('*'),
@@ -17,14 +17,15 @@ export async function syncMenu(): Promise<void> {
     supabase.from('modifiers').select('*'),
     supabase.from('modifier_variant_prices').select('*'),
     supabase.from('item_modifier_groups').select('*'),
+    supabase.from('discounts').select('*'),
   ])
-  for (const r of [categories, items, variants, groups, modifiers, variantPrices, links]) {
+  for (const r of [categories, items, variants, groups, modifiers, variantPrices, links, discounts]) {
     if (r.error) throw r.error
   }
 
   await db.transaction(
     'rw',
-    [db.meta, db.categories, db.menuItems, db.itemVariants, db.modifierGroups, db.modifiers, db.modifierVariantPrices, db.itemModifierGroups],
+    [db.meta, db.categories, db.menuItems, db.itemVariants, db.modifierGroups, db.modifiers, db.modifierVariantPrices, db.itemModifierGroups, db.discounts],
     async () => {
       await Promise.all([
         db.categories.clear(),
@@ -34,6 +35,7 @@ export async function syncMenu(): Promise<void> {
         db.modifiers.clear(),
         db.modifierVariantPrices.clear(),
         db.itemModifierGroups.clear(),
+        db.discounts.clear(),
       ])
       await Promise.all([
         db.categories.bulkPut(categories.data!),
@@ -43,6 +45,7 @@ export async function syncMenu(): Promise<void> {
         db.modifiers.bulkPut(modifiers.data!),
         db.modifierVariantPrices.bulkPut(variantPrices.data!),
         db.itemModifierGroups.bulkPut(links.data!),
+        db.discounts.bulkPut(discounts.data!),
       ])
       await setMeta('menuSyncedAt', new Date().toISOString())
     },

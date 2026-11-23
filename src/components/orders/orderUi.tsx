@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { CloudUpload, TriangleAlert } from 'lucide-react'
 import { db, type LocalOrder, type OrderStatus } from '@/lib/db'
 import { businessDate, STATUS_LABEL } from '@/lib/format'
-import { setOrderStatus } from '@/lib/orders'
+import { isUnpaid, setOrderStatus } from '@/lib/orders'
 import { requestSync } from '@/lib/sync'
 import { cn } from '@/lib/utils'
 
@@ -21,6 +21,15 @@ export function StatusBadge({ status, className }: { status: OrderStatus; classN
   )
 }
 
+/** Marks an order that hasn't been paid yet (pay later). */
+export function UnpaidBadge({ className }: { className?: string }) {
+  return (
+    <span className={cn('rounded-sm bg-warning-bg px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-warning', className)}>
+      Unpaid
+    </span>
+  )
+}
+
 /** Small marker for an order (or its status change) that hasn't reached the server. */
 export function SyncMarker({ order }: { order: LocalOrder }) {
   if (order.syncStatus === 'failed') {
@@ -30,7 +39,7 @@ export function SyncMarker({ order }: { order: LocalOrder }) {
       </span>
     )
   }
-  if (order.syncStatus === 'pending' || order.statusSync === 'pending') {
+  if (order.syncStatus === 'pending' || order.statusSync === 'pending' || order.paymentSync === 'pending') {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-semibold text-warning">
         <CloudUpload className="size-3.5" aria-hidden="true" /> Waiting to sync
@@ -76,6 +85,18 @@ export function useQueue(timeZone: string): LocalOrder[] {
           .toArray()
       ).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     [today],
+    [],
+  )
+}
+
+/**
+ * Every order on this device that still has to be paid, oldest first: today's
+ * and earlier days' (the sync keeps recent unpaid orders on the device).
+ */
+export function useUnpaid(): LocalOrder[] {
+  return useLiveQuery(
+    async () => (await db.orders.filter(isUnpaid).toArray()).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    [],
     [],
   )
 }

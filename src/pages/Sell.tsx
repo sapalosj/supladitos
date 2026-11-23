@@ -7,6 +7,7 @@ import { useMenu, shortVariant, type MenuEntry } from '@/hooks/useMenu'
 import { useCart, type CartLine } from '@/hooks/useCart'
 import { useIsTablet } from '@/hooks/useMediaQuery'
 import { nextOrderNumber, saveOrder } from '@/lib/orders'
+import { lineDiscount } from '@/lib/pricing'
 import { requestSync } from '@/lib/sync'
 import { businessDate, orderNo, peso, priceList, shortDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -112,7 +113,9 @@ export default function Sell() {
     else setPhoneView('payment')
   }
 
-  async function complete(p: PaymentInput) {
+  /** Save the sale. `p` is null for "pay later": the order is saved unpaid. */
+  async function complete(p: PaymentInput | null) {
+    if (saving) return
     setSaving(true)
     try {
       const total = cart.total
@@ -122,7 +125,8 @@ export default function Sell() {
           branchId: profile.branchId,
           orderType: cart.orderType,
           customerName: cart.customerName.trim() || null,
-          subtotal: total,
+          subtotal: cart.subtotal,
+          discountTotal: cart.discountTotal,
           total,
           items: cart.lines.map((l) => ({
             id: crypto.randomUUID(),
@@ -134,6 +138,9 @@ export default function Sell() {
             quantity: l.quantity,
             lineTotal: l.unitPrice * l.quantity,
             notes: l.notes || null,
+            discount: l.discount
+              ? { ...l.discount, amount: lineDiscount(l.unitPrice, l.quantity, l.discount) }
+              : null,
             modifiers: l.modifiers.map((m) => ({
               id: crypto.randomUUID(),
               modifierId: m.modifierId,
@@ -142,7 +149,14 @@ export default function Sell() {
               quantity: m.quantity,
             })),
           })),
-          payment: { id: crypto.randomUUID(), method: p.method, amount: total, amountReceived: p.amountReceived, changeDue: p.changeDue },
+          payment: p && {
+            id: crypto.randomUUID(),
+            method: p.method,
+            amount: total,
+            amountReceived: p.amountReceived,
+            changeDue: p.changeDue,
+            paidAt: new Date().toISOString(),
+          },
           createdBy: profile.userId,
         },
         profile.timezone,
@@ -151,7 +165,11 @@ export default function Sell() {
       setPaying(false)
       setPhoneView(null)
       toast.success(`Order ${orderNo(order.orderNumber)} saved`, {
-        description: p.changeDue ? `Change due ${peso(p.changeDue)}` : undefined,
+        description: p
+          ? p.changeDue
+            ? `Change due ${peso(p.changeDue)}`
+            : undefined
+          : `Not paid yet: ${order.customerName ? `${order.customerName} owes ` : ''}${peso(total)}`,
       })
       void requestSync()
     } catch (e) {
@@ -254,7 +272,14 @@ export default function Sell() {
       {/* Tablet: cart docked on the right */}
       {isTablet && (
         <aside aria-label="Cart" className="w-[340px] flex-none border-l">
-          <CartPanel layout="tablet" title={`Order ${orderNo(nextNumber)}`} onEdit={editLine} onCharge={charge} />
+          <CartPanel
+            layout="tablet"
+            title={`Order ${orderNo(nextNumber)}`}
+            busy={saving}
+            onEdit={editLine}
+            onCharge={charge}
+            onPayLater={() => void complete(null)}
+          />
         </aside>
       )}
 
@@ -275,7 +300,15 @@ export default function Sell() {
               onComplete={complete}
             />
           ) : (
-            <CartPanel layout="phone" title="Cart" onBack={() => setPhoneView(null)} onEdit={editLine} onCharge={charge} />
+            <CartPanel
+              layout="phone"
+              title="Cart"
+              busy={saving}
+              onBack={() => setPhoneView(null)}
+              onEdit={editLine}
+              onCharge={charge}
+              onPayLater={() => void complete(null)}
+            />
           )}
         </SheetContent>
       </Sheet>
