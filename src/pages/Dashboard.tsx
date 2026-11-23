@@ -124,6 +124,11 @@ function Report({ summary: s, delta, compareLabel }: { summary: Summary; delta: 
             {Math.abs(Math.round(delta * 100))}% vs {compareLabel}
           </span>
         )}
+        {s.discounts > 0 && (
+          <span className="text-xs text-muted-foreground" data-testid="discounts-given">
+            After {peso(s.discounts)} in discounts on {s.discountedCount} {s.discountedCount === 1 ? 'order' : 'orders'}
+          </span>
+        )}
         {s.voidedCount > 0 && (
           <span className="text-xs text-muted-foreground">
             {s.voidedCount} voided {s.voidedCount === 1 ? 'order' : 'orders'} not counted
@@ -260,6 +265,18 @@ function MethodBreakdown({ summary: s }: { summary: Summary }) {
             <dd className="tabular font-semibold">{peso(s.byMethod[m])}</dd>
           </div>
         ))}
+        {s.unpaidCount > 0 && (
+          <div className="flex items-center gap-2 text-warning">
+            <span className="size-2.5 flex-none rounded-full border border-current" aria-hidden="true" />
+            <dt className="flex-1">
+              Unpaid{' '}
+              <span className="text-xs">
+                · {s.unpaidCount} {s.unpaidCount === 1 ? 'order' : 'orders'}
+              </span>
+            </dt>
+            <dd className="tabular font-semibold">{peso(s.unpaid)}</dd>
+          </div>
+        )}
       </dl>
     </div>
   )

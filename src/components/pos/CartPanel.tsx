@@ -1,31 +1,39 @@
-import { ChevronLeft, Minus, Pencil, Plus, ShoppingBag } from 'lucide-react'
+import { ChevronLeft, Clock, Minus, Pencil, Plus, ShoppingBag } from 'lucide-react'
 import { lineDetail, useCart, type CartLine } from '@/hooks/useCart'
 import { ORDER_TYPE_LABEL, peso } from '@/lib/format'
+import { lineDiscount } from '@/lib/pricing'
 import type { OrderType } from '@/lib/db'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/layout/Page'
+import { DiscountControl, useDiscounts } from './DiscountControl'
 
 /**
  * The cart (Pages Design: "POS — Cart" on phones, the docked column on
  * tablets; 5.6, 5.7): order type, optional customer name, lines with quantity,
- * edit and notes, and the Charge button.
+ * edit, notes and discount, and the Charge button. "Pay later" saves the order unpaid
+ * (the customer name is optional there too).
  */
 export function CartPanel({
   layout,
   title,
   onBack,
+  busy = false,
   onEdit,
   onCharge,
+  onPayLater,
 }: {
   layout: 'phone' | 'tablet'
   title: string
   onBack?: () => void
+  busy?: boolean
   onEdit: (line: CartLine) => void
   onCharge: () => void
+  onPayLater: () => void
 }) {
   const cart = useCart()
   const phone = layout === 'phone'
+  const discounts = useDiscounts()
 
   const orderMeta = (
     <>
@@ -82,12 +90,43 @@ export function CartPanel({
                   </span>
                 )}
               </div>
-              <span className="tabular text-base font-bold whitespace-nowrap">{peso(l.unitPrice * l.quantity)}</span>
+              <span className="flex flex-col items-end">
+                <span className="tabular text-base font-bold whitespace-nowrap">
+                  {peso(l.unitPrice * l.quantity - lineDiscount(l.unitPrice, l.quantity, l.discount))}
+                </span>
+                {l.discount && (
+                  <span className="tabular text-xs whitespace-nowrap text-muted-foreground line-through">
+                    {peso(l.unitPrice * l.quantity)}
+                  </span>
+                )}
+              </span>
             </div>
+            {l.discount && (
+              <DiscountControl
+                discounts={discounts}
+                itemName={l.itemName}
+                unitPrice={l.unitPrice}
+                quantity={l.quantity}
+                value={l.discount}
+                onChange={(d) => cart.setDiscount(l.key, d)}
+              />
+            )}
             <div className="flex items-center justify-between">
-              <Button variant="ghost" className="-ml-2 px-2 text-caramel-text" onClick={() => onEdit(l)}>
-                <Pencil /> Edit
-              </Button>
+              <span className="-ml-2 flex items-center">
+                <Button variant="ghost" className="px-2 text-caramel-text" onClick={() => onEdit(l)}>
+                  <Pencil /> Edit
+                </Button>
+                {!l.discount && (
+                  <DiscountControl
+                    discounts={discounts}
+                    itemName={l.itemName}
+                    unitPrice={l.unitPrice}
+                    quantity={l.quantity}
+                    value={null}
+                    onChange={(d) => cart.setDiscount(l.key, d)}
+                  />
+                )}
+              </span>
               <span className="flex items-center gap-1">
                 <Button
                   variant="outline"
@@ -117,13 +156,30 @@ export function CartPanel({
 
   const footer = (
     <div className="flex flex-none flex-col gap-3 border-t px-4 pt-3 pb-4">
+      {cart.discountTotal > 0 && (
+        <dl className="flex flex-col gap-1 text-sm" data-testid="cart-discount">
+          <div className="flex justify-between text-muted-foreground">
+            <dt>Subtotal</dt>
+            <dd className="tabular">{peso(cart.subtotal)}</dd>
+          </div>
+          <div className="flex justify-between text-success">
+            <dt>Discount</dt>
+            <dd className="tabular font-semibold">−{peso(cart.discountTotal)}</dd>
+          </div>
+        </dl>
+      )}
       <div className="flex items-baseline justify-between">
         <span className="text-base font-bold">Total</span>
         <span className="font-display text-[32px] leading-9">{peso(cart.total)}</span>
       </div>
-      <Button size="lg" className="text-lg" disabled={cart.lines.length === 0} onClick={onCharge}>
-        {cart.lines.length ? `Charge ${peso(cart.total)}` : 'Charge'}
-      </Button>
+      <div className="flex gap-2">
+        <Button variant="outline" size="lg" disabled={cart.lines.length === 0 || busy} onClick={onPayLater}>
+          <Clock /> Pay later
+        </Button>
+        <Button size="lg" className="min-w-0 flex-1 text-lg" disabled={cart.lines.length === 0 || busy} onClick={onCharge}>
+          {cart.lines.length ? `Charge ${peso(cart.total)}` : 'Charge'}
+        </Button>
+      </div>
     </div>
   )
 

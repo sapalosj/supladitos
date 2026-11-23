@@ -109,6 +109,26 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"discounts": {
+                  Row: {
+                    "branch_id": string,"created_at": string,"id": string,"is_active": boolean,"name": string,"percent": number,"sort_order": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "branch_id"?: string,"created_at"?: string,"id"?: string,"is_active"?: boolean,"name": string,"percent": number,"sort_order"?: number
+                  }
+                  Update: {
+                    "branch_id"?: string,"created_at"?: string,"id"?: string,"is_active"?: boolean,"name"?: string,"percent"?: number,"sort_order"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "discounts_branch_id_fkey"
+      columns: ["branch_id"]
+isOneToOne: false
+      referencedRelation: "branches"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"item_modifier_groups": {
                   Row: {
                     "branch_id": string,"menu_item_id": string,"modifier_group_id": string,"sort_order": number
@@ -299,14 +319,14 @@ isOneToOne: false
                   ]
                 },"order_items": {
                   Row: {
-                    "branch_id": string,"id": string,"item_name_snapshot": string,"line_total": number,"menu_item_id": string | null,"notes": string | null,"order_id": string,"quantity": number,"sort_order": number,"unit_price": number,"variant_id": string | null,"variant_name_snapshot": string | null
+                    "branch_id": string,"discount_amount": number,"discount_id": string | null,"discount_name": string | null,"discount_percent": number | null,"discount_quantity": number,"id": string,"item_name_snapshot": string,"line_total": number,"menu_item_id": string | null,"notes": string | null,"order_id": string,"quantity": number,"sort_order": number,"unit_price": number,"variant_id": string | null,"variant_name_snapshot": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "branch_id": string,"id": string,"item_name_snapshot": string,"line_total": number,"menu_item_id"?: string | null,"notes"?: string | null,"order_id": string,"quantity": number,"sort_order"?: number,"unit_price": number,"variant_id"?: string | null,"variant_name_snapshot"?: string | null
+                    "branch_id": string,"discount_amount"?: number,"discount_id"?: string | null,"discount_name"?: string | null,"discount_percent"?: number | null,"discount_quantity"?: number,"id": string,"item_name_snapshot": string,"line_total": number,"menu_item_id"?: string | null,"notes"?: string | null,"order_id": string,"quantity": number,"sort_order"?: number,"unit_price": number,"variant_id"?: string | null,"variant_name_snapshot"?: string | null
                   }
                   Update: {
-                    "branch_id"?: string,"id"?: string,"item_name_snapshot"?: string,"line_total"?: number,"menu_item_id"?: string | null,"notes"?: string | null,"order_id"?: string,"quantity"?: number,"sort_order"?: number,"unit_price"?: number,"variant_id"?: string | null,"variant_name_snapshot"?: string | null
+                    "branch_id"?: string,"discount_amount"?: number,"discount_id"?: string | null,"discount_name"?: string | null,"discount_percent"?: number | null,"discount_quantity"?: number,"id"?: string,"item_name_snapshot"?: string,"line_total"?: number,"menu_item_id"?: string | null,"notes"?: string | null,"order_id"?: string,"quantity"?: number,"sort_order"?: number,"unit_price"?: number,"variant_id"?: string | null,"variant_name_snapshot"?: string | null
                   }
                   Relationships: [
                     {
@@ -314,6 +334,12 @@ isOneToOne: false
       columns: ["branch_id"]
 isOneToOne: false
       referencedRelation: "branches"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "order_items_discount_id_fkey"
+      columns: ["discount_id"]
+isOneToOne: false
+      referencedRelation: "discounts"
       referencedColumns: ["id"]
     },{
       foreignKeyName: "order_items_menu_item_id_fkey"
@@ -357,14 +383,14 @@ isOneToOne: false
                   ]
                 },"orders": {
                   Row: {
-                    "branch_id": string,"business_date": string,"computed_total": number | null,"created_at": string,"created_by": string | null,"customer_name": string | null,"id": string,"order_number": number,"order_type": Database["public"]['Enums']["order_type"],"price_mismatch": boolean,"status": Database["public"]['Enums']["order_status"],"status_changed_at": string | null,"subtotal": number,"synced_at": string,"total": number,"void_reason": string | null,"voided_at": string | null,"voided_by": string | null
+                    "branch_id": string,"business_date": string,"computed_total": number | null,"created_at": string,"created_by": string | null,"customer_name": string | null,"discount_total": number,"id": string,"order_number": number,"order_type": Database["public"]['Enums']["order_type"],"price_mismatch": boolean,"status": Database["public"]['Enums']["order_status"],"status_changed_at": string | null,"subtotal": number,"synced_at": string,"total": number,"void_reason": string | null,"voided_at": string | null,"voided_by": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "branch_id": string,"business_date": string,"computed_total"?: number | null,"created_at"?: string,"created_by"?: string | null,"customer_name"?: string | null,"id": string,"order_number": number,"order_type"?: Database["public"]['Enums']["order_type"],"price_mismatch"?: boolean,"status"?: Database["public"]['Enums']["order_status"],"status_changed_at"?: string | null,"subtotal": number,"synced_at"?: string,"total": number,"void_reason"?: string | null,"voided_at"?: string | null,"voided_by"?: string | null
+                    "branch_id": string,"business_date": string,"computed_total"?: number | null,"created_at"?: string,"created_by"?: string | null,"customer_name"?: string | null,"discount_total"?: number,"id": string,"order_number": number,"order_type"?: Database["public"]['Enums']["order_type"],"price_mismatch"?: boolean,"status"?: Database["public"]['Enums']["order_status"],"status_changed_at"?: string | null,"subtotal": number,"synced_at"?: string,"total": number,"void_reason"?: string | null,"voided_at"?: string | null,"voided_by"?: string | null
                   }
                   Update: {
-                    "branch_id"?: string,"business_date"?: string,"computed_total"?: number | null,"created_at"?: string,"created_by"?: string | null,"customer_name"?: string | null,"id"?: string,"order_number"?: number,"order_type"?: Database["public"]['Enums']["order_type"],"price_mismatch"?: boolean,"status"?: Database["public"]['Enums']["order_status"],"status_changed_at"?: string | null,"subtotal"?: number,"synced_at"?: string,"total"?: number,"void_reason"?: string | null,"voided_at"?: string | null,"voided_by"?: string | null
+                    "branch_id"?: string,"business_date"?: string,"computed_total"?: number | null,"created_at"?: string,"created_by"?: string | null,"customer_name"?: string | null,"discount_total"?: number,"id"?: string,"order_number"?: number,"order_type"?: Database["public"]['Enums']["order_type"],"price_mismatch"?: boolean,"status"?: Database["public"]['Enums']["order_status"],"status_changed_at"?: string | null,"subtotal"?: number,"synced_at"?: string,"total"?: number,"void_reason"?: string | null,"voided_at"?: string | null,"voided_by"?: string | null
                   }
                   Relationships: [
                     {
@@ -445,11 +471,20 @@ isOneToOne: false
 "last_order_number":
 { Args: { "p_business_date"?: string }; Returns: number
                            },
+"line_discount_amount":
+{ Args: { "p_percent": number,"p_quantity": number,"p_unit_price": number }; Returns: number
+                           },
+"pay_order":
+{ Args: { "p_order_id": string,"p_payment": Json }; Returns: Json
+                           },
 "save_menu_item":
 { Args: { "p_item": Json }; Returns: string
                            },
 "save_modifier_group":
 { Args: { "p_group": Json }; Returns: string
+                           },
+"set_order_discounts":
+{ Args: { "p_discounts": Json,"p_order_id": string }; Returns: Json
                            },
 "set_sort_order":
 { Args: { "p_ids": (string)[],"p_table": string }; Returns: undefined

@@ -1,32 +1,51 @@
 import { useMemo, useState } from 'react'
-import { CalendarDays, CloudOff, History, LoaderCircle, ReceiptText } from 'lucide-react'
+import { Banknote, CalendarDays, CircleCheck, CloudOff, History, LoaderCircle, ReceiptText } from 'lucide-react'
 import { useProfile } from '@/lib/auth'
 import type { LocalOrder, OrderStatus, PaymentMethod } from '@/lib/db'
 import { useOrders } from '@/hooks/useOrders'
+import { isUnpaid } from '@/lib/orders'
 import { businessDate, ORDER_TYPE_LABEL, orderNo, PAYMENT_LABEL, peso, relativeTime, shortDate, STATUS_LABEL, timeOfDay } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { EmptyState, PageBody, PageHeader, Segment, SegmentedList } from '@/components/layout/Page'
-import { NEXT_STEP, StatusBadge, SyncMarker, advanceOrder, itemDetail, itemsSummary, useQueue } from '@/components/orders/orderUi'
+import {
+  NEXT_STEP,
+  StatusBadge,
+  SyncMarker,
+  UnpaidBadge,
+  advanceOrder,
+  itemDetail,
+  itemsSummary,
+  useQueue,
+  useUnpaid,
+} from '@/components/orders/orderUi'
 import { OrderDetail } from '@/components/orders/OrderDetail'
+import { TakePaymentDialog } from '@/components/orders/TakePaymentDialog'
 
 const pill =
   'h-9 rounded-full border border-input bg-background px-3 text-[13px] font-semibold data-[size=default]:h-9 shadow-none'
 
-/** Orders — queue & history (Pages Design: "Orders — queue & history"; milestone 6). */
+/**
+ * Orders — queue, unpaid & history (Pages Design: "Orders — queue & history";
+ * milestone 6). Unpaid lists every pay-later order that hasn't been paid yet.
+ */
 export default function Orders() {
   const profile = useProfile()
   const tz = profile.timezone
   const queue = useQueue(tz)
+  const unpaid = useUnpaid()
   const [open, setOpen] = useState<LocalOrder | null>(null)
+  const [paying, setPaying] = useState<LocalOrder | null>(null)
+  const today = businessDate(new Date(), tz)
 
   return (
     <Tabs defaultValue="queue" className="flex min-h-0 flex-1 flex-col gap-0">
       <PageHeader title="Orders">
         <SegmentedList>
           <Segment value="queue">Queue · {queue.length}</Segment>
+          <Segment value="unpaid">Unpaid · {unpaid.length}</Segment>
           <Segment value="history">History</Segment>
         </SegmentedList>
       </PageHeader>
@@ -40,11 +59,31 @@ export default function Orders() {
             queue.map((o) => <QueueCard key={o.id} order={o} onOpen={() => setOpen(o)} />)
           )}
         </TabsContent>
+        <TabsContent value="unpaid" className="flex flex-col gap-3">
+          {unpaid.length === 0 ? (
+            <EmptyState icon={CircleCheck} title="Everyone has paid">
+              Orders saved with “Pay later” stay here until the payment is taken.
+            </EmptyState>
+          ) : (
+            <>
+              <div className="flex items-baseline justify-between">
+                <h2 className="text-base font-bold">Not paid yet</h2>
+                <span className="tabular text-xs text-muted-foreground" data-testid="unpaid-total">
+                  {unpaid.length} {unpaid.length === 1 ? 'order' : 'orders'} · {peso(unpaid.reduce((n, o) => n + o.total, 0))}
+                </span>
+              </div>
+              {unpaid.map((o) => (
+                <UnpaidCard key={o.id} order={o} today={today} timeZone={tz} onOpen={() => setOpen(o)} onPay={() => setPaying(o)} />
+              ))}
+            </>
+          )}
+        </TabsContent>
         <TabsContent value="history">
           <OrderHistory timeZone={tz} onOpen={setOpen} />
         </TabsContent>
       </PageBody>
       <OrderDetail order={open} timeZone={tz} onClose={() => setOpen(null)} />
+      <TakePaymentDialog order={paying} onClose={() => setPaying(null)} />
     </Tabs>
   )
 }
@@ -62,7 +101,10 @@ function QueueCard({ order: o, onOpen }: { order: LocalOrder; onOpen: () => void
               {o.customerName && ` · ${o.customerName}`} · {relativeTime(o.createdAt)}
             </span>
           </div>
-          <StatusBadge status={o.status} />
+          <span className="flex flex-none items-center gap-1.5">
+            {!o.payment && <UnpaidBadge />}
+            <StatusBadge status={o.status} />
+          </span>
         </div>
         <ul className="flex flex-col gap-1.5 text-sm">
           {o.items.map((i) => (
@@ -83,6 +125,44 @@ function QueueCard({ order: o, onOpen }: { order: LocalOrder; onOpen: () => void
   )
 }
 
+/** One unpaid order: who owes, how much, since when. */
+function UnpaidCard({
+  order: o,
+  today,
+  timeZone,
+  onOpen,
+  onPay,
+}: {
+  order: LocalOrder
+  today: string
+  timeZone: string
+  onOpen: () => void
+  onPay: () => void
+}) {
+  return (
+    <article className="flex flex-col gap-3 rounded-xl border bg-card p-3.5 shadow-sm">
+      <button type="button" onClick={onOpen} className="-m-1 flex flex-col gap-1.5 rounded-md p-1 text-left hover:bg-accent/40">
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-base font-extrabold">{o.customerName ?? `Order ${orderNo(o.orderNumber)}`}</span>
+          <span className="tabular flex-none font-display text-[22px] leading-[26px]">{peso(o.total)}</span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-[13px] text-muted-foreground">
+            {orderNo(o.orderNumber)} · {ORDER_TYPE_LABEL[o.orderType]} ·{' '}
+            {o.businessDate === today ? timeOfDay(o.createdAt, timeZone) : shortDate(o.businessDate, timeZone)}
+          </span>
+          <StatusBadge status={o.status} />
+        </div>
+        <span className="truncate text-[13px] text-muted-foreground">{itemsSummary(o)}</span>
+        <SyncMarker order={o} />
+      </button>
+      <Button className="h-12 text-[15px] font-bold" onClick={onPay}>
+        <Banknote /> Take payment · {peso(o.total)}
+      </Button>
+    </article>
+  )
+}
+
 function dayOffset(date: string, days: number): string {
   const d = new Date(`${date}T12:00:00Z`)
   d.setUTCDate(d.getUTCDate() + days)
@@ -94,13 +174,13 @@ function OrderHistory({ timeZone, onOpen }: { timeZone: string; onOpen: (o: Loca
   const today = businessDate(new Date(), timeZone)
   const [date, setDate] = useState(today)
   const [status, setStatus] = useState<'all' | OrderStatus>('all')
-  const [method, setMethod] = useState<'all' | PaymentMethod>('all')
+  const [method, setMethod] = useState<'all' | 'unpaid' | PaymentMethod>('all')
   const { orders, loading, complete } = useOrders(date, date)
 
   const shown = useMemo(
     () =>
       orders
-        .filter((o) => (status === 'all' || o.status === status) && (method === 'all' || o.payment?.method === method))
+        .filter((o) => (status === 'all' || o.status === status) && (method === 'all' || (method === 'unpaid' ? isUnpaid(o) : o.payment?.method === method)))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [orders, status, method],
   )
@@ -160,6 +240,7 @@ function OrderHistory({ timeZone, onOpen }: { timeZone: string; onOpen: (o: Loca
                 {PAYMENT_LABEL[m]}
               </SelectItem>
             ))}
+            <SelectItem value="unpaid" className="h-11">Unpaid</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -196,7 +277,9 @@ function OrderHistory({ timeZone, onOpen }: { timeZone: string; onOpen: (o: Loca
                   <span className="w-[58px] flex-none font-display text-lg">{orderNo(o.orderNumber)}</span>
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="text-sm font-semibold">
-                      {timeOfDay(o.createdAt, timeZone)} · {o.payment ? PAYMENT_LABEL[o.payment.method] : '—'}
+                      {timeOfDay(o.createdAt, timeZone)} ·{' '}
+                      {o.payment ? PAYMENT_LABEL[o.payment.method] : voided ? '—' : <span className="text-warning">Unpaid</span>}
+                      {!o.payment && !voided && o.customerName && ` · ${o.customerName}`}
                     </span>
                     <span className="truncate text-xs text-muted-foreground">{itemsSummary(o)}</span>
                     <SyncMarker order={o} />

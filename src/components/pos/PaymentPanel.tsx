@@ -35,9 +35,15 @@ export function PaymentPanel({
   orderType,
   customerName,
   busy,
+  title = 'Payment',
+  backLabel = 'Back to cart',
+  completeLabel = 'Complete sale',
   onBack,
   onComplete,
 }: {
+  title?: string
+  backLabel?: string
+  completeLabel?: string
   total: number
   orderType: OrderType
   customerName: string
@@ -66,10 +72,10 @@ export function PaymentPanel({
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-none items-center gap-2 border-b px-2 py-3">
-        <Button variant="ghost" size="icon" aria-label="Back to cart" onClick={onBack} disabled={busy}>
+        <Button variant="ghost" size="icon" aria-label={backLabel} onClick={onBack} disabled={busy}>
           <ChevronLeft />
         </Button>
-        <h2 className="flex-1 text-xl leading-7 font-extrabold">Payment</h2>
+        <h2 className="flex-1 text-xl leading-7 font-extrabold">{title}</h2>
         <span className="truncate pr-3 text-sm text-muted-foreground">
           {ORDER_TYPE_LABEL[orderType]}
           {customerName.trim() && ` · ${customerName.trim()}`}
@@ -170,7 +176,7 @@ export function PaymentPanel({
       <footer className="flex-none border-t px-4 pt-3 pb-5">
         <Button size="lg" className="w-full text-lg" disabled={short || busy} onClick={complete}>
           {busy ? <Loader2 className="animate-spin" /> : <Check className="size-5" />}
-          {short && receivedNum == null ? 'Enter cash received' : 'Complete sale'}
+          {short && receivedNum == null ? 'Enter cash received' : completeLabel}
         </Button>
       </footer>
     </div>

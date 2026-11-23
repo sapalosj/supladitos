@@ -105,7 +105,8 @@ function CloseDay({ closes, closesLoading }: { closes: DayCloseRow[] | undefined
         business_date: date,
         order_count: s.orderCount,
         gross_sales: s.sales,
-        totals_by_method: s.byMethod,
+        // "unpaid" is only there when something was still unpaid at the close.
+        totals_by_method: s.unpaid > 0 ? { ...s.byMethod, unpaid: s.unpaid } : s.byMethod,
         expected_cash: expected,
         actual_cash: actual,
         notes: note.trim() || null,
@@ -152,7 +153,15 @@ function CloseDay({ closes, closesLoading }: { closes: DayCloseRow[] | undefined
       )}
       {open > 0 && (
         <Banner icon={TriangleAlert}>
-          {open} {open === 1 ? 'order is' : 'orders are'} still in the queue. They count as sales; void any that weren’t paid.
+          {open} {open === 1 ? 'order is' : 'orders are'} still in the queue. They count as sales; void any that were cancelled.
+        </Banner>
+      )}
+      {s.unpaidCount > 0 && (
+        <Banner icon={TriangleAlert}>
+          <b className="font-bold">
+            {s.unpaidCount} {s.unpaidCount === 1 ? 'order is' : 'orders are'} not paid yet ({pesoExact(s.unpaid)}).
+          </b>{' '}
+          They count as sales but not as cash. Take the payments from Orders → Unpaid before closing, or void what won’t be paid.
         </Banner>
       )}
 
@@ -170,10 +179,22 @@ function CloseDay({ closes, closesLoading }: { closes: DayCloseRow[] | undefined
                 <dd className="tabular font-semibold">{pesoExact(s.byMethod[m])}</dd>
               </div>
             ))}
+            {s.unpaid > 0 && (
+              <div className="flex justify-between text-warning">
+                <dt>Unpaid</dt>
+                <dd className="tabular font-semibold">{pesoExact(s.unpaid)}</dd>
+              </div>
+            )}
             <div className="flex items-baseline justify-between border-t pt-2.5">
               <dt className="font-bold">Total</dt>
               <dd className="font-display text-[26px] leading-[30px]">{pesoExact(s.sales)}</dd>
             </div>
+            {s.discounts > 0 && (
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <dt>Discounts given (already taken off)</dt>
+                <dd className="tabular">{pesoExact(s.discounts)}</dd>
+              </div>
+            )}
           </dl>
         )}
       </Section>
@@ -288,6 +309,12 @@ function ClosedDay({ close: c, timeZone }: { close: DayCloseRow; timeZone: strin
               <dd className="tabular font-semibold">{pesoExact(Number(totals[m] ?? 0))}</dd>
             </div>
           ))}
+          {Number(totals.unpaid ?? 0) > 0 && (
+            <div className="flex justify-between text-warning">
+              <dt>Unpaid at close</dt>
+              <dd className="tabular font-semibold">{pesoExact(Number(totals.unpaid))}</dd>
+            </div>
+          )}
           <div className="flex items-baseline justify-between border-t pt-2.5">
             <dt className="font-bold">Total</dt>
             <dd className="font-display text-[26px] leading-[30px]">{pesoExact(Number(c.gross_sales))}</dd>

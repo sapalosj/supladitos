@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { OrderType } from '@/lib/db'
-import type { PricedModifier, Selections } from '@/lib/pricing'
+import type { LineDiscount, OrderType } from '@/lib/db'
+import { lineDiscount, type PricedModifier, type Selections } from '@/lib/pricing'
 
 export interface CartLine {
   key: string
@@ -16,6 +16,8 @@ export interface CartLine {
   modifiers: PricedModifier[]
   /** Raw selections, to reopen the line for editing. */
   selections: Selections
+  /** A percentage off some of the line's units (e.g. 2 of 5). */
+  discount?: LineDiscount | null
 }
 
 export interface Cart {
@@ -26,7 +28,13 @@ export interface Cart {
 
 interface CartContextValue extends Cart {
   count: number
+  /** Full price of all lines. */
+  subtotal: number
+  discountTotal: number
+  /** What the customer pays: subtotal - discountTotal. */
   total: number
+  /** Set (or clear, with null) the discount on a line. */
+  setDiscount: (key: string, discount: LineDiscount | null) => void
   /** Adds a line; an identical line (same item, size, options, note) just gets more quantity. */
   addLine: (line: Omit<CartLine, 'key'>) => void
   replaceLine: (key: string, line: Omit<CartLine, 'key'>) => void
@@ -59,6 +67,12 @@ function signature(l: Omit<CartLine, 'key'>): string {
   return `${l.variantId}|${mods}|${l.notes.trim()}|${l.unitPrice}`
 }
 
+/** A line's discount can't cover more units than the line has. */
+function clampDiscount(d: LineDiscount | null | undefined, quantity: number): LineDiscount | null {
+  if (!d || d.quantity <= 0) return null
+  return d.quantity > quantity ? { ...d, quantity } : d
+}
+
 const CartContext = createContext<CartContextValue | null>(null)
 
 /** The order being rung up (5.6, 5.7). Kept per device so a reload doesn't lose it. */
@@ -88,13 +102,21 @@ export function CartProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const replaceLine = useCallback((key: string, line: Omit<CartLine, 'key'>) => {
-    setCart((c) => ({ ...c, lines: c.lines.map((l) => (l.key === key ? { ...line, key } : l)) }))
+    setCart((c) => ({ ...c, lines: c.lines.map((l) => (l.key === key ? { ...line, key, discount: clampDiscount(l.discount, line.quantity) } : l)),
+    }))
   }, [])
 
   const setQuantity = useCallback((key: string, quantity: number) => {
     setCart((c) => ({
       ...c,
-      lines: quantity <= 0 ? c.lines.filter((l) => l.key !== key) : c.lines.map((l) => (l.key === key ? { ...l, quantity } : l)),
+      lines: quantity <= 0 ? c.lines.filter((l) => l.key !== key) : c.lines.map((l) => (l.key === key ? { ...l, quantity, discount: clampDiscount(l.discount, quantity) } : l)),
+    }))
+  }, [])
+
+  const setDiscount = useCallback((key: string, discount: LineDiscount | null) => {
+    setCart((c) => ({
+      ...c,
+      lines: c.lines.map((l) => (l.key === key ? { ...l, discount: clampDiscount(discount, l.quantity) } : l)),
     }))
   }, [])
 
@@ -108,9 +130,24 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<CartContextValue>(() => {
     const count = cart.lines.reduce((n, l) => n + l.quantity, 0)
-    const total = cart.lines.reduce((n, l) => n + l.unitPrice * l.quantity, 0)
-    return { ...cart, count, total, addLine, replaceLine, setQuantity, removeLine, setOrderType, setCustomerName, clear }
-  }, [cart, addLine, replaceLine, setQuantity, removeLine, setOrderType, setCustomerName, clear])
+    const subtotal = cart.lines.reduce((n, l) => n + l.unitPrice * l.quantity, 0)
+    const discountTotal = cart.lines.reduce((n, l) => n + lineDiscount(l.unitPrice, l.quantity, l.discount), 0)
+    return {
+      ...cart,
+      count,
+      subtotal,
+      discountTotal,
+      total: subtotal - discountTotal,
+      addLine,
+      replaceLine,
+      setQuantity,
+      setDiscount,
+      removeLine,
+      setOrderType,
+      setCustomerName,
+      clear,
+    }
+  }, [cart, addLine, replaceLine, setQuantity, setDiscount, removeLine, setOrderType, setCustomerName, clear])
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>
 }

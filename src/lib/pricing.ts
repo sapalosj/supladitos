@@ -1,5 +1,19 @@
-import type { ItemVariant, Modifier } from './db'
+import type { ItemVariant, LineDiscount, Modifier } from './db'
 import { modifierPrice, type MenuData, type MenuEntry, type MenuGroup } from '@/hooks/useMenu'
+
+/**
+ * Discount on one unit: the percentage off the unit price (drink plus
+ * add-ons), rounded to the peso. Must match line_discount_amount in the database.
+ */
+export function discountPerUnit(unitPrice: number, percent: number): number {
+  return Math.round((Math.round(unitPrice * 100) * percent) / 10000)
+}
+
+/** Discount on a line: the per-unit discount times the discounted units. */
+export function lineDiscount(unitPrice: number, quantity: number, d: LineDiscount | null | undefined): number {
+  if (!d || d.quantity <= 0) return 0
+  return discountPerUnit(unitPrice, d.percent) * Math.min(d.quantity, quantity)
+}
 
 /** Selected modifiers: modifier id -> quantity (1 unless the group allows quantity). */
 export type Selections = Record<string, number>

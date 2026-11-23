@@ -6,6 +6,7 @@ import type { Enums, Tables } from './supabase'
  *
  * - Menu cache: a copy of the branch's menu tables, refreshed whenever the app
  *   is online. The POS reads the menu only from here.
+ * - Discounts: the branch's discount types, cached with the menu.
  * - Orders: the outbox. Every sale is written here first with
  *   syncStatus = 'pending', then pushed through the submit_order RPC.
  *   Today's orders from the server are copied in too, so the queue shows
@@ -19,6 +20,7 @@ export type ModifierGroup = Tables<'modifier_groups'>
 export type Modifier = Tables<'modifiers'>
 export type ModifierVariantPrice = Tables<'modifier_variant_prices'>
 export type ItemModifierGroup = Tables<'item_modifier_groups'>
+export type Discount = Tables<'discounts'>
 
 export type OrderStatus = Enums<'order_status'>
 export type OrderType = Enums<'order_type'>
@@ -33,6 +35,15 @@ export interface LocalOrderModifier {
   quantity: number
 }
 
+/** A percentage off some units of a line (e.g. 2 of 5 drinks). */
+export interface LineDiscount {
+  discountId: string | null
+  name: string
+  percent: number
+  /** How many units of the line get the discount. */
+  quantity: number
+}
+
 export interface LocalOrderItem {
   id: string
   menuItemId: string | null
@@ -44,6 +55,8 @@ export interface LocalOrderItem {
   lineTotal: number
   notes: string | null
   modifiers: LocalOrderModifier[]
+  /** unitPrice and lineTotal stay at the full price; `amount` is what came off. */
+  discount?: (LineDiscount & { amount: number }) | null
 }
 
 export interface LocalPayment {
@@ -52,6 +65,8 @@ export interface LocalPayment {
   amount: number
   amountReceived: number | null
   changeDue: number | null
+  /** When the payment was taken (later than the order for pay-later orders). */
+  paidAt?: string | null
 }
 
 export interface LocalOrder {
@@ -65,9 +80,14 @@ export interface LocalOrder {
   statusChangedAt: string | null
   voidReason: string | null
   voidedAt: string | null
+  /** Full price of all lines. */
   subtotal: number
+  /** Sum of the line discounts (missing on orders saved before discounts existed). */
+  discountTotal?: number
+  /** What the customer pays: subtotal - discountTotal. */
   total: number
   items: LocalOrderItem[]
+  /** Null while the order is unpaid (pay later). */
   payment: LocalPayment | null
   createdAt: string
   createdBy: string | null
@@ -75,6 +95,11 @@ export interface LocalOrder {
   syncStatus: SyncStatus
   /** A status change (or void) made on this device that the server has not seen yet. */
   statusSync: 'pending' | 'synced'
+  /** A payment taken on this device after the order was saved, not on the server yet. */
+  paymentSync?: 'pending' | 'synced'
+  /** Discounts changed on this device after the order was saved, not on the server yet. */
+  discountSync?: 'pending' | 'synced'
+  discountChangedAt?: string | null
   syncAttempts: number
   syncError: string | null
   lastSyncAttemptAt: string | null
@@ -95,6 +120,7 @@ export const db = new Dexie('supladitos') as Dexie & {
   modifiers: EntityTable<Modifier, 'id'>
   modifierVariantPrices: Table<ModifierVariantPrice, [string, string]>
   itemModifierGroups: Table<ItemModifierGroup, [string, string]>
+  discounts: EntityTable<Discount, 'id'>
   orders: EntityTable<LocalOrder, 'id'>
 }
 
@@ -114,6 +140,15 @@ db.version(2).stores({
   orders: 'id, syncStatus, statusSync, businessDate, status, createdAt, [businessDate+orderNumber]',
 })
 
+db.version(3).stores({
+  orders: 'id, syncStatus, statusSync, paymentSync, businessDate, status, createdAt, [businessDate+orderNumber]',
+})
+
+db.version(4).stores({
+  discounts: 'id',
+  orders: 'id, syncStatus, statusSync, paymentSync, discountSync, businessDate, status, createdAt, [businessDate+orderNumber]',
+})
+
 // ---- meta helpers -----------------------------------------------------------
 
 export async function getMeta<T>(key: string): Promise<T | undefined> {
@@ -128,7 +163,7 @@ export async function setMeta(key: string, value: unknown): Promise<void> {
 export async function clearUserCache(): Promise<void> {
   await db.transaction(
     'rw',
-    [db.meta, db.categories, db.menuItems, db.itemVariants, db.modifierGroups, db.modifiers, db.modifierVariantPrices, db.itemModifierGroups],
+    [db.meta, db.categories, db.menuItems, db.itemVariants, db.modifierGroups, db.modifiers, db.modifierVariantPrices, db.itemModifierGroups, db.discounts],
     async () => {
       await Promise.all([
         db.meta.where('key').anyOf('profile', 'menuSyncedAt', 'lastServerOrderNumber').delete(),
@@ -139,6 +174,7 @@ export async function clearUserCache(): Promise<void> {
         db.modifiers.clear(),
         db.modifierVariantPrices.clear(),
         db.itemModifierGroups.clear(),
+        db.discounts.clear(),
       ])
     },
   )
